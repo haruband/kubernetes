@@ -225,6 +225,7 @@ func (c *Controller) RunKubernetesService(ch chan struct{}) {
 	}, c.EndpointInterval, ch)
 }
 
+// HARUBAND
 // UpdateKubernetesService attempts to update the default Kube service.
 func (c *Controller) UpdateKubernetesService(reconcile bool) error {
 	// Update service & endpoint records.

@@ -102,6 +102,7 @@ func checkNonZeroInsecurePort(fs *pflag.FlagSet) error {
 	return nil
 }
 
+// HARUBAND
 // NewAPIServerCommand creates a *cobra.Command object with default parameters
 func NewAPIServerCommand() *cobra.Command {
 	s := options.NewServerRunOptions()
@@ -176,6 +177,7 @@ cluster's shared state through which all other components interact.`,
 	return cmd
 }
 
+// HARUBAND
 // Run runs the specified APIServer.  This should never exit.
 func Run(completeOptions completedServerRunOptions, stopCh <-chan struct{}) error {
 	// To help debugging, immediately log version
@@ -498,6 +500,7 @@ func buildGenericConfig(
 	if genericConfig.EgressSelector != nil {
 		storageFactory.StorageConfig.Transport.EgressLookup = genericConfig.EgressSelector.Lookup
 	}
+  // HARUBAND
 	if lastErr = s.Etcd.ApplyWithStorageFactoryTo(storageFactory, genericConfig); lastErr != nil {
 		return
 	}

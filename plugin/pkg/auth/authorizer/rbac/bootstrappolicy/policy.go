@@ -570,6 +570,7 @@ const systemNodeRoleName = "system:node"
 
 // ClusterRoleBindings return default rolebindings to the default roles
 func ClusterRoleBindings() []rbacv1.ClusterRoleBinding {
+  // HARUBAND
 	rolebindings := []rbacv1.ClusterRoleBinding{
 		rbacv1helpers.NewClusterBinding("cluster-admin").Groups(user.SystemPrivilegedGroup).BindingOrDie(),
 		rbacv1helpers.NewClusterBinding("system:monitoring").Groups(user.MonitoringGroup).BindingOrDie(),

@@ -71,6 +71,7 @@ func NewServerRunOptions() *ServerRunOptions {
 	}
 }
 
+// HARUBAND
 // ApplyTo applies the run options to the method receiver and returns self
 func (s *ServerRunOptions) ApplyTo(c *server.Config) error {
 	c.CorsAllowedOriginList = s.CorsAllowedOriginList

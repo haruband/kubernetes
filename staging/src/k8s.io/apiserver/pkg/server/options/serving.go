@@ -140,6 +140,7 @@ func (s *SecureServingOptions) Validate() []error {
 	return errors
 }
 
+// HARUBAND
 func (s *SecureServingOptions) AddFlags(fs *pflag.FlagSet) {
 	if s == nil {
 		return
@@ -242,6 +243,7 @@ func (s *SecureServingOptions) ApplyTo(config **server.SecureServingInfo) error 
 	}
 	c := *config
 
+  // HARUBAND
 	serverCertFile, serverKeyFile := s.ServerCert.CertKey.CertFile, s.ServerCert.CertKey.KeyFile
 	// load main cert
 	if len(serverCertFile) != 0 || len(serverKeyFile) != 0 {

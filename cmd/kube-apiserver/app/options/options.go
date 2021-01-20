@@ -94,6 +94,7 @@ type ServerRunOptions struct {
 	ShowHiddenMetricsForVersion string
 }
 
+// HARUBAND
 // NewServerRunOptions creates a new ServerRunOptions object with default parameters
 func NewServerRunOptions() *ServerRunOptions {
 	s := ServerRunOptions{

@@ -243,6 +243,7 @@ func ListResource(r rest.Lister, rw rest.Watcher, scope *RequestScope, forceWatc
 			}
 		}
 
+    // HARUBAND
 		if opts.Watch || forceWatch {
 			if rw == nil {
 				scope.err(errors.NewMethodNotSupported(scope.Resource.GroupResource(), "watch"), w, req)

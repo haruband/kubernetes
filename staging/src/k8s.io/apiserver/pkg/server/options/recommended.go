@@ -92,6 +92,7 @@ func (o *RecommendedOptions) AddFlags(fs *pflag.FlagSet) {
 	o.EgressSelector.AddFlags(fs)
 }
 
+// HARUBAND
 // ApplyTo adds RecommendedOptions to the server configuration.
 // pluginInitializers can be empty, it is only need for additional initializers.
 func (o *RecommendedOptions) ApplyTo(config *server.RecommendedConfig) error {

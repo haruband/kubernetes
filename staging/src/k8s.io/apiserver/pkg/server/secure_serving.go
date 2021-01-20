@@ -41,6 +41,7 @@ const (
 	defaultKeepAlivePeriod = 3 * time.Minute
 )
 
+// HARUBAND
 // tlsConfig produces the tls.Config to serve with.
 func (s *SecureServingInfo) tlsConfig(stopCh <-chan struct{}) (*tls.Config, error) {
 	tlsConfig := &tls.Config{
@@ -141,6 +142,7 @@ func (s *SecureServingInfo) tlsConfig(stopCh <-chan struct{}) (*tls.Config, erro
 	return tlsConfig, nil
 }
 
+// HARUBAND
 // Serve runs the secure http server. It fails only if certificates cannot be loaded or the initial listen call fails.
 // The actual server loop (stoppable by closing stopCh) runs in a go routine, i.e. Serve does not block.
 // It returns a stoppedCh that is closed when all non-hijacked active requests have been processed.
