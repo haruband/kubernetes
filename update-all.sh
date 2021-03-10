@@ -1,7 +1,5 @@
 #!/bin/bash
 
-./build/run.sh make
-
 sudo systemctl stop kubelet
 sudo systemctl stop kube-apiserver
 
