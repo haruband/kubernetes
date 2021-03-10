@@ -38,6 +38,7 @@ import (
 	utilio "k8s.io/utils/io"
 	utilpath "k8s.io/utils/path"
 
+	libcontainerdevices "github.com/opencontainers/runc/libcontainer/devices"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -53,6 +54,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/cm/containermap"
 	"k8s.io/kubernetes/pkg/kubelet/cm/cpumanager"
 	"k8s.io/kubernetes/pkg/kubelet/cm/devicemanager"
+	"k8s.io/kubernetes/pkg/kubelet/cm/memorymanager"
 	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager"
 	cmutil "k8s.io/kubernetes/pkg/kubelet/cm/util"
 	"k8s.io/kubernetes/pkg/kubelet/config"
@@ -69,10 +71,10 @@ import (
 )
 
 const (
-	dockerProcessName     = "dockerd"
+	dockerProcessName = "dockerd"
+	// dockerd option --pidfile can specify path to use for daemon PID file, pid file path is default "/var/run/docker.pid"
 	dockerPidFile         = "/var/run/docker.pid"
-	containerdProcessName = "docker-containerd"
-	containerdPidFile     = "/run/docker/libcontainerd/docker-containerd.pid"
+	containerdProcessName = "containerd"
 	maxPidFileLength      = 1 << 10 // 1KB
 )
 
@@ -138,6 +140,8 @@ type containerManagerImpl struct {
 	deviceManager devicemanager.Manager
 	// Interface for CPU affinity management.
 	cpuManager cpumanager.Manager
+	// Interface for memory affinity management.
+	memoryManager memorymanager.Manager
 	// Interface for Topology resource co-ordination
 	topologyManager topologymanager.Manager
 }
@@ -341,6 +345,22 @@ func NewContainerManager(mountUtil mount.Interface, cadvisorInterface cadvisor.I
 		cm.topologyManager.AddHintProvider(cm.cpuManager)
 	}
 
+	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MemoryManager) {
+		cm.memoryManager, err = memorymanager.NewManager(
+			nodeConfig.ExperimentalMemoryManagerPolicy,
+			machineInfo,
+			cm.GetNodeAllocatableReservation(),
+			nodeConfig.ExperimentalMemoryManagerReservedMemory,
+			nodeConfig.KubeletRootDir,
+			cm.topologyManager,
+		)
+		if err != nil {
+			klog.Errorf("failed to initialize memory manager: %v", err)
+			return nil, err
+		}
+		cm.topologyManager.AddHintProvider(cm.memoryManager)
+	}
+
 	return cm, nil
 }
 
@@ -364,7 +384,7 @@ func (cm *containerManagerImpl) NewPodContainerManager() PodContainerManager {
 }
 
 func (cm *containerManagerImpl) InternalContainerLifecycle() InternalContainerLifecycle {
-	return &internalContainerLifecycleImpl{cm.cpuManager, cm.topologyManager}
+	return &internalContainerLifecycleImpl{cm.cpuManager, cm.memoryManager, cm.topologyManager}
 }
 
 // Create a cgroup container manager.
@@ -373,13 +393,13 @@ func createManager(containerName string) (cgroups.Manager, error) {
 		Parent: "/",
 		Name:   containerName,
 		Resources: &configs.Resources{
-			Devices: []*configs.DeviceRule{
+			Devices: []*libcontainerdevices.Rule{
 				{
 					Type:        'a',
 					Permissions: "rwm",
 					Allow:       true,
-					Minor:       configs.Wildcard,
-					Major:       configs.Wildcard,
+					Minor:       libcontainerdevices.Wildcard,
+					Major:       libcontainerdevices.Wildcard,
 				},
 			},
 			SkipDevices: true,
@@ -606,6 +626,18 @@ func (cm *containerManagerImpl) Start(node *v1.Node,
 		}
 	}
 
+	// Initialize memory manager
+	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MemoryManager) {
+		containerMap, err := buildContainerMapFromRuntime(runtimeService)
+		if err != nil {
+			return fmt.Errorf("failed to build map of initial containers from runtime: %v", err)
+		}
+		err = cm.memoryManager.Start(memorymanager.ActivePodsFunc(activePods), sourcesReady, podStatusProvider, runtimeService, containerMap)
+		if err != nil {
+			return fmt.Errorf("start memory manager error: %v", err)
+		}
+	}
+
 	// cache the node Info including resource capacity and
 	// allocatable of the node
 	cm.nodeInfo = node
@@ -706,11 +738,12 @@ func (cm *containerManagerImpl) GetAllocateResourcesPodAdmitHandler() lifecycle.
 	// work as we add more and more hint providers that the TopologyManager
 	// needs to call Allocate() on (that may not be directly intstantiated
 	// inside this component).
-	return &resourceAllocator{cm.cpuManager, cm.deviceManager}
+	return &resourceAllocator{cm.cpuManager, cm.memoryManager, cm.deviceManager}
 }
 
 type resourceAllocator struct {
 	cpuManager    cpumanager.Manager
+	memoryManager memorymanager.Manager
 	deviceManager devicemanager.Manager
 }
 
@@ -729,6 +762,17 @@ func (m *resourceAllocator) Admit(attrs *lifecycle.PodAdmitAttributes) lifecycle
 
 		if m.cpuManager != nil {
 			err = m.cpuManager.Allocate(pod, &container)
+			if err != nil {
+				return lifecycle.PodAdmitResult{
+					Message: fmt.Sprintf("Allocate failed due to %v, which is unexpected", err),
+					Reason:  "UnexpectedAdmissionError",
+					Admit:   false,
+				}
+			}
+		}
+
+		if m.memoryManager != nil {
+			err = m.memoryManager.Allocate(pod, &container)
 			if err != nil {
 				return lifecycle.PodAdmitResult{
 					Message: fmt.Sprintf("Allocate failed due to %v, which is unexpected", err),
@@ -841,6 +885,8 @@ func EnsureDockerInContainer(dockerAPIVersion *utilversion.Version, oomScoreAdj 
 	type process struct{ name, file string }
 	dockerProcs := []process{{dockerProcessName, dockerPidFile}}
 	if dockerAPIVersion.AtLeast(containerdAPIVersion) {
+		// By default containerd is started separately, so there is no pid file.
+		containerdPidFile := ""
 		dockerProcs = append(dockerProcs, process{containerdProcessName, containerdPidFile})
 	}
 	var errs []error
@@ -1024,11 +1070,19 @@ func (cm *containerManagerImpl) GetDevicePluginResourceCapacity() (v1.ResourceLi
 }
 
 func (cm *containerManagerImpl) GetDevices(podUID, containerName string) []*podresourcesapi.ContainerDevices {
-	return cm.deviceManager.GetDevices(podUID, containerName)
+	return containerDevicesFromResourceDeviceInstances(cm.deviceManager.GetDevices(podUID, containerName))
+}
+
+func (cm *containerManagerImpl) GetAllocatableDevices() []*podresourcesapi.ContainerDevices {
+	return containerDevicesFromResourceDeviceInstances(cm.deviceManager.GetAllocatableDevices())
 }
 
 func (cm *containerManagerImpl) GetCPUs(podUID, containerName string) []int64 {
-	return cm.cpuManager.GetCPUs(podUID, containerName)
+	return cm.cpuManager.GetCPUs(podUID, containerName).ToSliceNoSortInt64()
+}
+
+func (cm *containerManagerImpl) GetAllocatableCPUs() []int64 {
+	return cm.cpuManager.GetAllocatableCPUs().ToSliceNoSortInt64()
 }
 
 func (cm *containerManagerImpl) ShouldResetExtendedResourceCapacity() bool {

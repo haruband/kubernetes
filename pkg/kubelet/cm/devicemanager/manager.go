@@ -37,7 +37,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
-	podresourcesapi "k8s.io/kubelet/pkg/apis/podresources/v1"
 	v1helper "k8s.io/kubernetes/pkg/apis/core/v1/helper"
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/kubelet/checkpointmanager"
@@ -85,8 +84,8 @@ type ManagerImpl struct {
 	// e.g. a new device is advertised, two old devices are deleted and a running device fails.
 	callback monitorCallback
 
-	// allDevices is a map by resource name of all the devices currently registered to the device manager
-	allDevices map[string]map[string]pluginapi.Device
+	// allDevices holds all the devices currently registered to the device manager
+	allDevices ResourceDeviceInstances
 
 	// healthyDevices contains all of the registered healthy resourceNames and their exported device IDs.
 	healthyDevices map[string]sets.String
@@ -152,7 +151,7 @@ func newManagerImpl(socketPath string, topology []cadvisorapi.Node, topologyAffi
 
 		socketname:            file,
 		socketdir:             dir,
-		allDevices:            make(map[string]map[string]pluginapi.Device),
+		allDevices:            NewResourceDeviceInstances(),
 		healthyDevices:        make(map[string]sets.String),
 		unhealthyDevices:      make(map[string]sets.String),
 		allocatedDevices:      make(map[string]sets.String),
@@ -940,9 +939,9 @@ func (m *ManagerImpl) GetDeviceRunContainerOptions(pod *v1.Pod, container *v1.Co
 	podUID := string(pod.UID)
 	contName := container.Name
 	needsReAllocate := false
-	for k := range container.Resources.Limits {
+	for k, v := range container.Resources.Limits {
 		resource := string(k)
-		if !m.isDevicePluginResource(resource) {
+		if !m.isDevicePluginResource(resource) || v.Value() == 0 {
 			continue
 		}
 		err := m.callPreStartContainerIfNeeded(podUID, contName, resource)
@@ -1068,8 +1067,17 @@ func (m *ManagerImpl) isDevicePluginResource(resource string) bool {
 	return false
 }
 
+// GetAllocatableDevices returns information about all the devices known to the manager
+func (m *ManagerImpl) GetAllocatableDevices() ResourceDeviceInstances {
+	m.mutex.Lock()
+	resp := m.allDevices.Clone()
+	m.mutex.Unlock()
+	klog.V(4).Infof("known devices: %d", len(resp))
+	return resp
+}
+
 // GetDevices returns the devices used by the specified container
-func (m *ManagerImpl) GetDevices(podUID, containerName string) []*podresourcesapi.ContainerDevices {
+func (m *ManagerImpl) GetDevices(podUID, containerName string) ResourceDeviceInstances {
 	return m.podDevices.getContainerDevices(podUID, containerName)
 }
 

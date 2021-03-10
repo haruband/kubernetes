@@ -60,10 +60,9 @@ type Manager interface {
 	// e.g. at pod admission time.
 	Allocate(pod *v1.Pod, container *v1.Container) error
 
-	// AddContainer is called between container create and container start
-	// so that initial CPU affinity settings can be written through to the
-	// container runtime before the first process begins to execute.
-	AddContainer(p *v1.Pod, c *v1.Container, containerID string) error
+	// AddContainer adds the mapping between container ID to pod UID and the container name
+	// The mapping used to remove the CPU allocation during the container removal
+	AddContainer(p *v1.Pod, c *v1.Container, containerID string)
 
 	// RemoveContainer is called after Kubelet decides to kill or delete a
 	// container. After this call, the CPU manager stops trying to reconcile
@@ -80,12 +79,15 @@ type Manager interface {
 
 	// GetCPUs implements the podresources.CPUsProvider interface to provide allocated
 	// cpus for the container
-	GetCPUs(podUID, containerName string) []int64
+	GetCPUs(podUID, containerName string) cpuset.CPUSet
 
 	// GetPodTopologyHints implements the topologymanager.HintProvider Interface
 	// and is consulted to achieve NUMA aware resource alignment per Pod
 	// among this and other resource controllers.
 	GetPodTopologyHints(pod *v1.Pod) map[string][]topologymanager.TopologyHint
+
+	// GetAllocatableCPUs returns the assignable (not allocated) CPUs
+	GetAllocatableCPUs() cpuset.CPUSet
 }
 
 type manager struct {
@@ -125,6 +127,9 @@ type manager struct {
 
 	// stateFileDirectory holds the directory where the state file for checkpoints is held.
 	stateFileDirectory string
+
+	// allocatableCPUs is the set of online CPUs as reported by the system
+	allocatableCPUs cpuset.CPUSet
 }
 
 var _ Manager = &manager{}
@@ -151,6 +156,7 @@ func NewManager(cpuPolicyName string, reconcilePeriod time.Duration, machineInfo
 			return nil, err
 		}
 		klog.Infof("[cpumanager] detected CPU topology: %v", topo)
+
 		reservedCPUs, ok := nodeAllocatableReservation[v1.ResourceCPU]
 		if !ok {
 			// The static policy cannot initialize without this information.
@@ -211,6 +217,8 @@ func (m *manager) Start(activePods ActivePodsFunc, sourcesReady config.SourcesRe
 		return err
 	}
 
+	m.allocatableCPUs = m.policy.GetAllocatableCPUs(m.state)
+
 	if m.policy.Name() == string(PolicyNone) {
 		return nil
 	}
@@ -237,29 +245,10 @@ func (m *manager) Allocate(p *v1.Pod, c *v1.Container) error {
 	return nil
 }
 
-func (m *manager) AddContainer(p *v1.Pod, c *v1.Container, containerID string) error {
+func (m *manager) AddContainer(pod *v1.Pod, container *v1.Container, containerID string) {
 	m.Lock()
-	// Get the CPUs assigned to the container during Allocate()
-	// (or fall back to the default CPUSet if none were assigned).
-	cpus := m.state.GetCPUSetOrDefault(string(p.UID), c.Name)
-	m.Unlock()
-
-	if !cpus.IsEmpty() {
-		err := m.updateContainerCPUSet(containerID, cpus)
-		if err != nil {
-			klog.Errorf("[cpumanager] AddContainer error: error updating CPUSet for container (pod: %s, container: %s, container id: %s, err: %v)", p.Name, c.Name, containerID, err)
-			m.Lock()
-			err := m.policyRemoveContainerByRef(string(p.UID), c.Name)
-			if err != nil {
-				klog.Errorf("[cpumanager] AddContainer rollback state error: %v", err)
-			}
-			m.Unlock()
-		}
-		return err
-	}
-
-	klog.V(5).Infof("[cpumanager] update container resources is skipped due to cpu set is empty")
-	return nil
+	defer m.Unlock()
+	m.containerMap.Add(string(pod.UID), container.Name, containerID)
 }
 
 func (m *manager) RemoveContainer(containerID string) error {
@@ -314,6 +303,10 @@ func (m *manager) GetPodTopologyHints(pod *v1.Pod) map[string][]topologymanager.
 	m.removeStaleState()
 	// Delegate to active policy
 	return m.policy.GetPodTopologyHints(m.state, pod)
+}
+
+func (m *manager) GetAllocatableCPUs() cpuset.CPUSet {
+	return m.allocatableCPUs.Clone()
 }
 
 type reconciledContainer struct {
@@ -461,9 +454,9 @@ func findContainerIDByName(status *v1.PodStatus, name string) (string, error) {
 }
 
 func findContainerStatusByName(status *v1.PodStatus, name string) (*v1.ContainerStatus, error) {
-	for _, status := range append(status.InitContainerStatuses, status.ContainerStatuses...) {
-		if status.Name == name {
-			return &status, nil
+	for _, containerStatus := range append(status.InitContainerStatuses, status.ContainerStatuses...) {
+		if containerStatus.Name == name {
+			return &containerStatus, nil
 		}
 	}
 	return nil, fmt.Errorf("unable to find status for container with name %v in pod status (it may not be running)", name)
@@ -481,11 +474,6 @@ func (m *manager) updateContainerCPUSet(containerID string, cpus cpuset.CPUSet) 
 		})
 }
 
-func (m *manager) GetCPUs(podUID, containerName string) []int64 {
-	cpus := m.state.GetCPUSetOrDefault(string(podUID), containerName)
-	result := []int64{}
-	for _, cpu := range cpus.ToSliceNoSort() {
-		result = append(result, int64(cpu))
-	}
-	return result
+func (m *manager) GetCPUs(podUID, containerName string) cpuset.CPUSet {
+	return m.state.GetCPUSetOrDefault(podUID, containerName)
 }

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math"
+	"os"
 	"path"
 	"sort"
 	"time"
@@ -79,7 +80,7 @@ func mustSetupScheduler() (util.ShutdownFunc, coreinformers.PodInformer, clients
 }
 
 // Returns the list of scheduled pods in the specified namespaces.
-// Note that no namespces specified matches all namespaces.
+// Note that no namespaces specified matches all namespaces.
 func getScheduledPods(podInformer coreinformers.PodInformer, namespaces ...string) ([]*v1.Pod, error) {
 	pods, err := podInformer.Lister().List(labels.Everything())
 	if err != nil {
@@ -134,6 +135,10 @@ func dataItems2JSONFile(dataItems DataItems, namePrefix string) error {
 
 	destFile := fmt.Sprintf("%v_%v.json", namePrefix, time.Now().Format(dateFormat))
 	if *dataItemsDir != "" {
+		// Ensure the "dataItemsDir" path to be valid.
+		if err := os.MkdirAll(*dataItemsDir, 0750); err != nil {
+			return fmt.Errorf("dataItemsDir path %v does not exist and cannot be created: %v", *dataItemsDir, err)
+		}
 		destFile = path.Join(*dataItemsDir, destFile)
 	}
 
@@ -251,12 +256,15 @@ func (tc *throughputCollector) run(ctx context.Context) {
 			}
 
 			scheduled := len(podsScheduled)
-			samplingRatioSeconds := float64(throughputSampleFrequency) / float64(time.Second)
-			throughput := float64(scheduled-lastScheduledCount) / samplingRatioSeconds
-			tc.schedulingThroughputs = append(tc.schedulingThroughputs, throughput)
-			lastScheduledCount = scheduled
+			// Only do sampling if number of scheduled pods is greater than zero
+			if scheduled > 0 {
+				samplingRatioSeconds := float64(throughputSampleFrequency) / float64(time.Second)
+				throughput := float64(scheduled-lastScheduledCount) / samplingRatioSeconds
+				tc.schedulingThroughputs = append(tc.schedulingThroughputs, throughput)
+				lastScheduledCount = scheduled
+				klog.Infof("%d pods scheduled", lastScheduledCount)
+			}
 
-			klog.Infof("%d pods scheduled", lastScheduledCount)
 		}
 	}
 }
