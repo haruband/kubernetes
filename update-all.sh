@@ -1,10 +1,9 @@
 #!/bin/bash
 
-sudo systemctl stop kubelet
-sudo systemctl stop kube-apiserver
+TARGET=${1:-kubelet}
 
-sudo cp -f _output/dockerized/bin/linux/amd64/kubelet /usr/bin/kubelet
-sudo cp -f _output/dockerized/bin/linux/amd64/kube-apiserver /usr/bin/kube-apiserver
+sudo systemctl stop ${TARGET}
 
-sudo systemctl start kubelet
-sudo systemctl start kube-apiserver
+sudo cp -f _output/bin/${TARGET} /usr/bin/
+
+sudo systemctl start ${TARGET}
