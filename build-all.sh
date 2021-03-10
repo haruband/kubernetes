@@ -1,3 +1,5 @@
 #!/bin/bash
 
-KUBE_BUILD_PLATFORMS=linux/amd64 make -j $(nproc)
+TARGET=${1:-kubelet}
+
+KUBE_BUILD_PLATFORMS=linux/amd64 make -j $(nproc) WHAT=cmd/${TARGET}
